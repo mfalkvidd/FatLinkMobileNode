@@ -12,11 +12,21 @@
      Set power setTxPower(x) where 5 <= x <=20
 */
 
+/* Dependencies:
+   TinyGPSPlus: https://github.com/mikalhart/TinyGPSPlus
+   Radiohead: www.airspayce.com/mikem/arduino/RadioHead/
+   Time: Board Manager, search for "gps" (yes I know the search term is strange)
+*/
+extern "C" {
+#include "user_interface.h"
+}
+#include <ESP8266WiFi.h>
+
 #include <SPI.h>
 #include <RH_RF95.h>
 
 #ifdef ESP8266
-#define RFM_CS D2
+#define RFM_CS D8
 #define RFM_INT D1
 #else
 #define RFM_CS 10
@@ -26,10 +36,20 @@
 
 #define PAYLOADSIZE 128
 
-#define SYSLOG serialLocal
+#define SYSLOG serialLocal // define as "none" to disable
+#if SYSLOG==none
+class None {
+  public:
+    void log(...) {}
+    void logf(...) {}
+};
+None none;
+#endif
 #define MAX_LOG_LENGTH 128
+
 #include <stdarg.h>
 #include <Syslog.h> // Needs to be included to get access to LOG_INFO, etc
+#if SYSLOG==serialLocal
 class SerialLocal {
   public:
     void log(int level, const char* str) {
@@ -45,6 +65,7 @@ class SerialLocal {
     }
 };
 SerialLocal serialLocal;
+#endif
 
 RH_RF95 radio(RFM_CS, RFM_INT);
 
@@ -52,8 +73,8 @@ RH_RF95::ModemConfigChoice modem_config = RH_RF95::Bw125Cr48Sf4096;
 
 // This is where the pin TX pin of your GPS sensor is connected to the arduino
 #ifdef ESP8266
-#define GPS_PIN A0
-#define UNUSED_PIN D8
+#define GPS_PIN D2
+#define UNUSED_PIN A0
 #else
 #define GPS_PIN A0
 #define UNUSED_PIN A5
@@ -70,6 +91,7 @@ TinyGPSPlus gps;
 // The serial connection to the GPS device
 // A5 pin can be left unconnected
 SoftwareSerial ss(GPS_PIN, UNUSED_PIN);
+//HardwareSerial ss = Serial;
 unsigned int sendInterval = 30000; // Send interval in milliseconds
 
 // Last time message was sent
@@ -83,7 +105,13 @@ char payload[30];
 char sz[64];
 
 void setup() {
+  WiFi.mode(WIFI_STA);
+  wifi_fpm_set_sleep_type(LIGHT_SLEEP_T);
+  WiFi.setSleepMode(WIFI_LIGHT_SLEEP);
+
+#if SYSLOG==serialLocal
   Serial.begin(115200);
+#endif
   SYSLOG.log(LOG_INFO, "FatLink GW starting up");
   while (!radio.init()) {
     SYSLOG.log(LOG_INFO, "LoRa radio init failed");
@@ -95,10 +123,9 @@ void setup() {
     SYSLOG.log(LOG_INFO, "setFrequency failed");
     delay(5000);
   }
-  SYSLOG.logf(LOG_INFO, "Set Freq to %i kHz", RFM_FREQ * 1000);
 
   radio.setModemConfig(modem_config);
-  radio.setTxPower(20);
+  radio.setTxPower(23);
   // Set baudrate form gps communication
   ss.begin(GPSBaud);
 
@@ -128,24 +155,20 @@ void loop() {
       dtostrf(gps.location.lng(), 1, 6, lngBuf);
       dtostrf(gps.altitude.meters(), 1, 0, altBuf);
       sprintf(payload, "%s;%s;%s", latBuf, lngBuf, altBuf);
-      radio.send((uint8_t *)payload, strlen(payload));
-      SYSLOG.log(LOG_INFO, payload);
-      radio.waitPacketSent();
     } else {
       if (millis() > 5000 && gps.charsProcessed() < 10) {
-        char message[] = "No GPS data: check wiring";
-        radio.send((uint8_t *)message, strlen(message));
-        SYSLOG.logf(LOG_INFO, "Sent: %s", message);
-        radio.waitPacketSent();
-      }   else {
-        char message[] = "No GPS data yet...";
-        radio.send((uint8_t *)message, strlen(message));
-        SYSLOG.log(LOG_INFO, message);
-        radio.waitPacketSent();
+        sprintf(payload, "%s", "No GPS data: check wiring");
+      } else {
+        sprintf(payload, "%s", "No GPS data yet...");
       }
     }
+    radio.send((uint8_t *)payload, strlen(payload));
+    SYSLOG.log(LOG_INFO, payload);
+    radio.waitPacketSent();
+    SYSLOG.log(LOG_INFO, "Message sent");
     lastSent = currentTime;
   }
+  delay(100); // Let the ESP go to power save
 }
 
 void set_led(bool state) {
