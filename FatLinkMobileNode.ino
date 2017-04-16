@@ -5,7 +5,7 @@
      Set send interval
      Set message text
      Show current position + time
-     Show live lov (sebsocket?) - buffer last x messages
+     Show live log (websocket?) - buffer last x messages
      Fetch entire log file
      Clear/rotate log file
      Set spreading factor
@@ -37,7 +37,8 @@ extern "C" {
 
 #define PAYLOADSIZE 128
 
-#define SYSLOG serialLocal // define as "none" to disable
+//#define SYSLOG serialLocal // define as "none" to disable
+#define SYSLOG ramBuf
 #if SYSLOG==none
 class None {
   public:
@@ -47,6 +48,30 @@ class None {
 None none;
 #endif
 #define MAX_LOG_LENGTH 128
+#define NUM_MESSAGES 50
+
+#if SYSLOG==ramBuf
+#include <ESP8266WebServer.h>
+ESP8266WebServer server(80);
+char messages[NUM_MESSAGES][MAX_LOG_LENGTH] = {{0}};
+byte nextBuf = 0;
+class RamBuf {
+  public:
+    void log(int level, const char* str) {
+      memcpy(messages[nextBuf], str, MAX_LOG_LENGTH);
+      nextBuf = (nextBuf + 1) % NUM_MESSAGES;
+    }
+    void logf(int level, const char *format, ...) {
+      va_list ap;
+      va_start(ap, format);
+      vsnprintf(messages[nextBuf], MAX_LOG_LENGTH, format, ap);
+      va_end(ap);
+      nextBuf = (nextBuf + 1) % NUM_MESSAGES;
+    }
+};
+RamBuf ramBuf;
+
+#endif
 
 #include <stdarg.h>
 #include <Syslog.h> // Needs to be included to get access to LOG_INFO, etc
@@ -103,17 +128,42 @@ char latBuf[11];
 char lngBuf[11];
 char altBuf[6];
 char payload[30];
-char sz[64];
+char sz[64] = {0};
 
 void setup() {
-  WiFi.mode(WIFI_STA);
-  wifi_fpm_set_sleep_type(LIGHT_SLEEP_T);
-  WiFi.setSleepMode(WIFI_LIGHT_SLEEP);
+#if SYSLOG==ramBuf
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(MY_ESP8266_AP_SSID, MY_ESP8266_AP_PASSWORD);
 
-#if SYSLOG==serialLocal
-  Serial.begin(115200);
+  IPAddress myIP = WiFi.softAPIP();
+  Serial.print("AP IP address: ");
+  Serial.println(myIP);
+  server.on("/", []() {
+    String s = "";
+    for (int pos = nextBuf; pos < NUM_MESSAGES; pos++) {
+      if (messages[pos][0] != '\0') {
+        s += messages[pos];
+        s += '\n';
+      }
+    }
+    if (nextBuf != 0) {
+      for (int pos = 0; pos < nextBuf; pos++) {
+        if (messages[pos][0] != '\0') {
+          s += messages[pos];
+          s += '\n';
+        }
+      }
+    }
+    Serial.println(s);
+    server.send(200, "text/plan", s);
+  });
+  server.begin();
 #endif
-  SYSLOG.log(LOG_INFO, "FatLink GW starting up");
+
+  //#if SYSLOG==serialLocal
+  Serial.begin(115200);
+  //#endif
+  SYSLOG.log(LOG_INFO, "FatLink mobile node starting up");
   while (!radio.init()) {
     SYSLOG.log(LOG_INFO, "LoRa radio init failed");
     delay(5000);
@@ -160,7 +210,7 @@ void loop() {
       if (millis() > 5000 && gps.charsProcessed() < 10) {
         sprintf(payload, "%s", "No GPS data: check wiring");
       } else {
-        sprintf(payload, "%s", "No GPS data yet...");
+        sprintf(payload, "%s%s", "No GPS data yet...", sz);
       }
     }
     radio.send((uint8_t *)payload, strlen(payload));
@@ -169,6 +219,11 @@ void loop() {
     SYSLOG.log(LOG_INFO, "Message sent");
     lastSent = currentTime;
   }
+
+#if SYSLOG==ramBuf
+  server.handleClient();
+#endif
+
   delay(100); // Let the ESP go to power save
 }
 
