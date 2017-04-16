@@ -24,6 +24,7 @@ extern "C" {
 
 #include <SPI.h>
 #include <RH_RF95.h>
+#include "settings.h"
 
 #ifdef ESP8266
 #define RFM_CS D8
