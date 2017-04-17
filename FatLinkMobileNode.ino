@@ -131,6 +131,8 @@ char payload[30];
 char sz[64] = {0};
 
 void setup() {
+  Serial.begin(115200);
+
 #if SYSLOG==ramBuf
   WiFi.mode(WIFI_AP);
   WiFi.softAP(MY_ESP8266_AP_SSID, MY_ESP8266_AP_PASSWORD);
@@ -160,9 +162,6 @@ void setup() {
   server.begin();
 #endif
 
-  //#if SYSLOG==serialLocal
-  Serial.begin(115200);
-  //#endif
   SYSLOG.log(LOG_INFO, "FatLink mobile node starting up");
   while (!radio.init()) {
     SYSLOG.log(LOG_INFO, "LoRa radio init failed");
